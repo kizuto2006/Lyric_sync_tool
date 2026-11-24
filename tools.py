@@ -16,7 +16,7 @@ USER_AGENT = "LyricSyncTool/2.0 (https://github.com/kizuto/Lyric_sync_tool)"
 CJK_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
 INSTRUMENTAL_RE = re.compile(
-    r"(?:^|[\s\(\[\-_])(?:instrumental|inst\.?|off[\s\-_]*vocal|karaoke(?:\s*ver\.?)?|no[\s\-_]*vocal|bgm|beat[\s\-_]*only)(?:$|[\s\)\]\-_])",
+    r"(?:^|[\s\(\[\-_])(?:instrumental|inst\.?|off[\s\-_]*vocal|karaoke(?:\s*ver\.?)?|no[\s\-_]*vocal|bgm|beat[\s\-_]*only)(?:$|[\s\)\]\-_])|オフボーカル|ガイド無しカラオケ|カラオケ|インストゥルメンタル",
     re.IGNORECASE,
 )
 

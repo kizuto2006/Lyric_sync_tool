@@ -136,7 +136,7 @@ def process_single_track(meta: dict, mode: str, skip_existing: bool, force: bool
             if status == "FOUND":
                 chosen_ext = ".lrc"
             else:
-                # Bước 3: Fallback sang LRCLIB
+                # Bước 3: Fallback sang LRCLIB kể cả khi lrxy bị 502 Bad Gateway
                 status, content, new_rank, is_inst_api, err3 = fetch_lrclib_lrc(meta)
                 if is_inst_api:
                     return {"outcome": "INST_SKIP", "meta": meta}
@@ -147,7 +147,6 @@ def process_single_track(meta: dict, mode: str, skip_existing: bool, force: bool
                     if errors:
                         status = "ERROR"
                         error_detail = " | ".join(errors)
-
     if status == "FOUND" and content:
         # Không bao giờ ghi đè bản hiện có bằng bản chất lượng thấp hơn (trừ khi --force)
         if not force and new_rank < existing_rank:
