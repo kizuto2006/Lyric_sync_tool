@@ -13,6 +13,7 @@ from tools import (
     backup_same_extension,
     fetch_apple_ttml,
     fetch_lrclib_lrc,
+    fetch_netease_lrc,
     fetch_via_lrxy,
     get_audio_metadata,
     get_best_existing_rank,
@@ -124,7 +125,11 @@ def process_single_track(meta: dict, mode: str, skip_existing: bool, force: bool
             return {"outcome": "INST_SKIP", "meta": meta}
         chosen_ext = ".lrc"
 
-    elif mode == "5":  # Auto Smart dựa theo DB CJK / ABC
+    elif mode == "5":  # NetEase Cloud Music LRC/ELRC (Direct API)
+        status, content, new_rank, error_detail = fetch_netease_lrc(meta)
+        chosen_ext = ".lrc"
+
+    elif mode == "6":  # Auto Smart dựa theo DB CJK / ABC
         # Bước 1: Luôn ưu tiên chuẩn Apple Music TTML trước
         status, content, new_rank, err1 = fetch_apple_ttml(meta)
         if status == "FOUND":
@@ -136,17 +141,23 @@ def process_single_track(meta: dict, mode: str, skip_existing: bool, force: bool
             if status == "FOUND":
                 chosen_ext = ".lrc"
             else:
-                # Bước 3: Fallback sang LRCLIB kể cả khi lrxy bị 502 Bad Gateway
-                status, content, new_rank, is_inst_api, err3 = fetch_lrclib_lrc(meta)
-                if is_inst_api:
-                    return {"outcome": "INST_SKIP", "meta": meta}
+                # Bước 3: Gọi trực tiếp NetEase Cloud Music API (vượt lỗi 502 của paxsenix)
+                status, content, new_rank, err3 = fetch_netease_lrc(meta)
                 if status == "FOUND":
                     chosen_ext = ".lrc"
                 else:
-                    errors = [e for e in (err1, err2, err3) if e]
-                    if errors:
-                        status = "ERROR"
-                        error_detail = " | ".join(errors)
+                    # Bước 4: Fallback cuối sang LRCLIB
+                    status, content, new_rank, is_inst_api, err4 = fetch_lrclib_lrc(meta)
+                    if is_inst_api:
+                        return {"outcome": "INST_SKIP", "meta": meta}
+                    if status == "FOUND":
+                        chosen_ext = ".lrc"
+                    else:
+                        errors = [e for e in (err1, err2, err3, err4) if e]
+                        if errors:
+                            status = "ERROR"
+                            error_detail = " | ".join(errors)
+
     if status == "FOUND" and content:
         # Không bao giờ ghi đè bản hiện có bằng bản chất lượng thấp hơn (trừ khi --force)
         if not force and new_rank < existing_rank:
@@ -186,7 +197,7 @@ def append_log_file(log_path: Path, title: str, lines: list[str]):
 def main():
     parser = argparse.ArgumentParser(description="Lyric Multi-Source Fetcher (TTML / LRC)")
     parser.add_argument("target", nargs="?", default=".", help="Thư mục cần quét (mặc định: thư mục hiện tại)")
-    parser.add_argument("--mode", choices=["1", "2", "3", "4", "5", "6"], help="Chọn chế độ (1-6) không cần nhập tay")
+    parser.add_argument("--mode", choices=["1", "2", "3", "4", "5", "6", "7"], help="Chọn chế độ (1-7) không cần nhập tay")
     parser.add_argument("--skip-existing", action="store_true", default=True, help="Bỏ qua bài đã có lời (mặc định bật)")
     parser.add_argument("--overwrite", action="store_true", help="Cho phép nâng cấp/ghi đè nếu tìm thấy lời chất lượng cao hơn")
     parser.add_argument("--force", action="store_true", help="Bắt buộc tải lại và ghi đè kể cả khi bản mới thấp hạng hơn")
@@ -213,17 +224,18 @@ def main():
         print("  2. Musixmatch LRC (lrxy)")
         print("  3. QQ Music LRC (lrxy - tối ưu nhạc Hán/Nhật/Hàn)")
         print("  4. LRCLIB LRC (/api/get + /api/search)")
-        print("  5. Auto Smart (Ưu tiên Apple TTML -> Định tuyến CJK/ABC)")
-        print("  6. Chỉ quét & cập nhật DB phân loại (library_index.json)")
+        print("  5. NetEase Cloud Music LRC/ELRC (Direct API)")
+        print("  6. Auto Smart (Ưu tiên Apple TTML -> Định tuyến CJK/ABC)")
+        print("  7. Chỉ quét & cập nhật DB phân loại (library_index.json)")
         print("============================================================")
-        choice = input("👉 Chọn chế độ (1-6, nhấn Enter để chọn 1): ").strip() or "1"
+        choice = input("👉 Chọn chế độ (1-7, nhấn Enter để chọn 1): ").strip() or "1"
 
-    if choice not in {"1", "2", "3", "4", "5", "6"}:
+    if choice not in {"1", "2", "3", "4", "5", "6", "7"}:
         print("❌ Lựa chọn không hợp lệ.")
         sys.exit(1)
 
     records = scan_library(target_dir, force_rescan=args.force)
-    if choice == "6":
+    if choice == "7":
         print("✅ Đã cập nhật xong database phân loại!")
         return
 

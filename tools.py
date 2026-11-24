@@ -435,3 +435,144 @@ def fetch_lrclib_lrc(meta: dict) -> tuple[str, str, int, bool, str]:
         return "NOT_FOUND", "", RANK_NONE, False, ""
     except Exception as exc:
         return "ERROR", "", RANK_NONE, False, f"LRCLIB /api/search: {exc}"
+def _parse_netease_yrc(yrc_text: str) -> str:
+    """Chuyển đổi định dạng từng từ YRC của NetEase ([start,dur]từ(start,dur)) sang Enhanced LRC"""
+    out_lines = []
+    for raw_line in yrc_text.splitlines():
+        line_match = re.match(r"^\[(\d+),(\d+)\](.*)$", raw_line.strip())
+        if not line_match:
+            continue
+        line_start_ms = int(line_match.group(1))
+        rest = line_match.group(3)
+        tokens = re.findall(r"([^(]+)\((\d+),(\d+)(?:,\d+)?\)", rest)
+        if not tokens:
+            continue
+
+        mm, ss = divmod(line_start_ms / 1000.0, 60)
+        prefix = f"[{int(mm):02d}:{ss:05.2f}]"
+        parts = []
+        for word, w_start_str, _ in tokens:
+            w_ms = int(w_start_str)
+            wm, ws = divmod(w_ms / 1000.0, 60)
+            parts.append(f"<{int(wm):02d}:{ws:05.2f}>{word}")
+        out_lines.append(f"{prefix} {''.join(parts)}")
+    return "\n".join(out_lines).strip()
+
+
+def fetch_netease_lrc(meta: dict) -> tuple[str, str, int, str]:
+    """
+    Gọi trực tiếp API công khai của NetEase Cloud Music (không qua proxy trung gian).
+    Trả về: (status: FOUND|NOT_FOUND|ERROR, lrc_content, rank, detail_msg)
+    """
+    q_title = norm_str(meta["title"])
+    q_artists = set(split_artists(meta["artist"]))
+    if not q_title or not q_artists:
+        return "NOT_FOUND", "", RANK_NONE, "Thiếu title/artist"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "Referer": "https://music.163.com/",
+        "Cookie": "os=pc; appver=2.9.7",
+    }
+    query = f"{meta['title']} {meta['artist']}".strip()
+
+    try:
+        search_resp = requests.post(
+            "https://music.163.com/api/cloudsearch/pc",
+            data={"s": query, "type": 1, "offset": 0, "limit": 8},
+            headers=headers,
+            timeout=12,
+        )
+        if search_resp.status_code != 200:
+            return "ERROR", "", RANK_NONE, f"NetEase search HTTP {search_resp.status_code}"
+
+        payload = search_resp.json()
+        if not isinstance(payload, dict):
+            return "NOT_FOUND", "", RANK_NONE, ""
+
+        result_obj = payload.get("result")
+        if not isinstance(result_obj, dict):
+            return "NOT_FOUND", "", RANK_NONE, ""
+
+        songs = result_obj.get("songs")
+        if not isinstance(songs, list) or not songs:
+            return "NOT_FOUND", "", RANK_NONE, ""
+
+        q_dur = meta.get("duration", 0)
+        best_id = None
+        best_score = -1.0
+
+        for song in songs:
+            if not isinstance(song, dict):
+                continue
+            s_title = norm_str(song.get("name", ""))
+            if not s_title:
+                continue
+            if q_title != s_title and not (len(q_title) >= 3 and (q_title in s_title or s_title in q_title)):
+                continue
+
+            # cloudsearch/pc dùng khóa "ar" (hoặc "artists" ở API cũ)
+            raw_artists = song.get("ar") or song.get("artists") or []
+            s_artists = {
+                norm_str(a.get("name", ""))
+                for a in raw_artists
+                if isinstance(a, dict) and norm_str(a.get("name", ""))
+            }
+            if q_artists and s_artists and not (q_artists & s_artists):
+                continue
+
+            score = 45.0 if q_title == s_title else 25.0
+            if q_artists & s_artists:
+                score += 35.0
+
+            # cloudsearch/pc dùng khóa "dt" (ms) hoặc "duration" (ms)
+            raw_dur_ms = song.get("dt") or song.get("duration") or 0
+            s_dur = int(round(raw_dur_ms / 1000))
+            if q_dur > 0 and s_dur > 0:
+                diff = abs(q_dur - s_dur)
+                if diff <= 3:
+                    score += 25.0
+                elif diff <= 8:
+                    score += 10.0
+                else:
+                    continue
+
+            if score > best_score:
+                best_score = score
+                best_id = song.get("id")
+
+        if not best_id:
+            return "NOT_FOUND", "", RANK_NONE, ""
+
+        lyric_resp = requests.get(
+            "https://music.163.com/api/song/lyric",
+            params={"id": best_id, "lv": 1, "yv": 1, "tv": -1},
+            headers=headers,
+            timeout=12,
+        )
+        if lyric_resp.status_code != 200:
+            return "ERROR", "", RANK_NONE, f"NetEase lyric HTTP {lyric_resp.status_code}"
+
+        ldata = lyric_resp.json()
+        if not isinstance(ldata, dict):
+            return "NOT_FOUND", "", RANK_NONE, ""
+
+        # Ưu tiên lời từng từ (yrc) nếu bài hát có hỗ trợ
+        yrc_obj = ldata.get("yrc")
+        if isinstance(yrc_obj, dict):
+            yrc_raw = (yrc_obj.get("lyric") or "").strip()
+            if yrc_raw:
+                elrc = _parse_netease_yrc(yrc_raw)
+                if elrc:
+                    return "FOUND", elrc, RANK_ELRC_WORD, ""
+
+        # Fallback sang lời từng dòng chuẩn (.lrc)
+        lrc_obj = ldata.get("lrc")
+        if isinstance(lrc_obj, dict):
+            lrc_raw = (lrc_obj.get("lyric") or "").strip()
+            if lrc_raw and re.search(r"\[\d{1,2}:\d{2}", lrc_raw):
+                return "FOUND", lrc_raw, RANK_LRC_LINE, ""
+
+        return "NOT_FOUND", "", RANK_NONE, ""
+    except Exception as exc:
+        return "ERROR", "", RANK_NONE, f"NetEase: {exc}"
