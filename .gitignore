@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+library_index.json
+missing_lyrics.log
+error_lyrics.log
+*.bak
+test_sample/
+sync.log
+lrxy.log
+
+models_cache/
+remote_music/
+workspace/
+input/
+output/
+*.log
